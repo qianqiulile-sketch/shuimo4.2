@@ -1,0 +1,52 @@
+name: Build APK
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: 如果上传的是 zip，先解压
+        run: |
+          if [ ! -f gradlew ] && [ ! -f lingxi-dia/gradlew ]; then
+            Z=$(ls -t *.zip 2>/dev/null | head -n 1)
+            if [ -n "$Z" ]; then unzip -q -o "$Z" -d _src; fi
+          fi
+      - name: 找到项目目录
+        id: proj
+        run: |
+          D=$(find . -maxdepth 4 -name gradlew -not -path "./.git/*" -printf '%d %h\n' | sort -n | head -n 1 | cut -d' ' -f2-)
+          if [ -z "$D" ]; then echo "找不到 gradlew"; exit 1; fi
+          echo "dir=$D" >> $GITHUB_OUTPUT
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 编译 APK
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace --no-daemon
+      - name: 整理 APK
+        id: apk
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: |
+          VER=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts || echo dev)
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp app/build/outputs/apk/release/*.apk "$GITHUB_WORKSPACE/out/lingxi-dia-$VER-${GITHUB_RUN_NUMBER}.apk"
+          echo "ver=$VER" >> $GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lingxi-dia-apk
+          path: out/*.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.apk.outputs.ver }}-${{ github.run_number }}
+          name: 灵犀 Dia ${{ steps.apk.outputs.ver }}（第 ${{ github.run_number }} 次构建）
+          files: out/*.apk
